@@ -31,7 +31,7 @@ Log temperature data and progress from the USB port of a Prusa printer to an MQT
 optional arguments:
   -h, --help            show this help message and exit
   --topic TOPIC         Topic for the MQTT message. (default: sma)
-  --client_id MQTT_CLIENT_ID
+  --mqtt_client_id MQTT_CLIENT_ID
                         Distinct client ID for the MQTT connection. (default: sma2mqtt)
   --mqtt_address MQTT_ADDRESS
                         Address for the MQTT connection. (default: localhost)
