@@ -33,8 +33,6 @@ optional arguments:
   --topic TOPIC         Topic for the MQTT message. (default: sma)
   --client_id MQTT_CLIENT_ID
                         Distinct client ID for the MQTT connection. (default: sma2mqtt)
-  --serial_port SERIAL_PORT
-                        Path to the serial port device.
   --mqtt_address MQTT_ADDRESS
                         Address for the MQTT connection. (default: localhost)
   --mqtt_port MQTT_PORT
