@@ -25,7 +25,7 @@ usage: sma2mqtt [-h] [--topic TOPIC] [--mqtt_client_id MQTT_CLIENT_ID]
                      [--mqtt_port MQTT_PORT] [--mqtt_username MQTT_USERNAME]
                      [--mqtt_password MQTT_PASSWORD]
 
-Log temperature data and progress from the USB port of a Prusa printer to an MQTT server.
+Command line tool that listens to the multicast Speedwire of a SMA Energy Meter/Home Manger 2.0 and writes the values to a MQTT server.
 
 optional arguments:
   -h, --help            show this help message and exit
