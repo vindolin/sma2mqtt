@@ -8,6 +8,26 @@ import paho.mqtt.client as mqtt
 MULTICAST_IP = '239.12.255.254'
 MULTICAST_PORT = 9522
 
+DATA_START_OFFSET = 4
+
+
+def find_end_marker(data, offset):
+    position = data.find(b'\x00\x02\x0b\x05', offset) + 4
+    length = 1
+    return int.from_bytes(data[position: position + length], byteorder="big")
+
+
+def find_int32_be(data, marker, offset):
+    position = data.find(marker, offset) + len(marker)
+    length = 4
+    return int.from_bytes(data[position: position + length], byteorder='big')
+
+
+def find_bigint64_be(data, marker, offset):
+    position = data.find(marker, offset) + len(marker) # the -1 is here to include the last \x00 into the 8 bytes
+    length = 8
+    return int.from_bytes(data[position: position + length], byteorder="big")
+
 
 class NotAnSmaPacket(Exception):
     pass
@@ -41,10 +61,6 @@ def setup_socket():
     return sock
 
 
-def decode_bytes(data):
-    return int.from_bytes(data, byteorder="big") / 10
-
-
 def green(string):
     return f'\033[0;32m{string}\033[00m'
 
@@ -67,36 +83,59 @@ def color_value(number):
 
 
 def decode_speedwire(data):
-    # based on R. Mitchell's code from: https://gist.github.com/mitchese/afd823c3c5036c5b0e5394625f1a81e4
     if data[0:3] != b'SMA':  # only handle packets that start with SMA
+        raise NotAnSmaPacket
+
+    end = find_end_marker(data, DATA_START_OFFSET)
+    if end != 82:
         raise NotAnSmaPacket
 
     # file1 = open('data.txt', 'bw')
     # file1.write(bytearray(data))
     # file1.close()
 
-    l1_buy = decode_bytes(data[164:308][6:8])
-    l1_sell = decode_bytes(data[164:308][26:28])
+    total_w_buy = find_int32_be(data, b'\x00\x01\x04\x00', DATA_START_OFFSET)
+    total_w_buy /= 10
 
-    l2_buy = decode_bytes(data[308:452][6:8])
-    l2_sell = decode_bytes(data[308:452][26:28])
+    kwh_buy = find_bigint64_be(data, b'\x00\x01\x08\x00', DATA_START_OFFSET)
+    kwh_buy = kwh_buy / 3600 / 1000
 
-    l3_buy = decode_bytes(data[452:596][6:8])
-    l3_sell = decode_bytes(data[452:596][26:28])
+    l1_w = find_int32_be(data, b'\x00\x15\x04\x00', DATA_START_OFFSET)
+    l1_w_buy = l1_w / 10
 
-    total_buy = decode_bytes(data[34:36])
-    total_sell = decode_bytes(data[54:56])
+    l2_w = find_int32_be(data, b'\x00\x29\x04\x00', DATA_START_OFFSET)
+    l2_w_buy = l2_w / 10
 
-    l1_val = l1_sell if l1_sell > l1_buy else l1_buy * -1
-    l2_val = l2_sell if l2_sell > l2_buy else l2_buy * -1
-    l3_val = l3_sell if l3_sell > l3_buy else l3_buy * -1
+    l3_w = find_int32_be(data, b'\x00\x3d\x04\x00', DATA_START_OFFSET)
+    l3_w_buy = l3_w / 10
 
-    total_val = total_sell if total_sell > total_buy else total_buy * -1
+    total_w_sell = find_int32_be(data, b'\x00\x02\x04\x00', DATA_START_OFFSET)
+    total_w_sell /= 10
 
-    # 20 results from the length of 10000.0 (7) + the length of the ANSI color characters (13)
-    print(f'{color_value(l1_val): >20} + {color_value(l2_val): >20} + {color_value(l3_val): >20} = {color_value(total_val): >20}')
+    kwh_sell = find_bigint64_be(data, b'\x00\x02\x08\x00', DATA_START_OFFSET)
+    kwh_sell = kwh_sell / 3600 / 1000
 
-    return (total_buy, total_sell)
+    l1_w = find_int32_be(data, b'\x00\x16\x04\x00', DATA_START_OFFSET)
+    l1_w_sell = l1_w / 10
+
+    l2_w = find_int32_be(data, b'\x00\x2A\x04\x00', DATA_START_OFFSET)
+    l2_w_sell = l2_w / 10
+
+    l3_w = find_int32_be(data, b'\x00\x3e\x04\x00', DATA_START_OFFSET)
+    l3_w_sell = l3_w / 10
+
+    l1w_val = l1_w_sell if l1_w_sell > l1_w_buy else l1_w_buy * -1
+    l2w_val = l2_w_sell if l2_w_sell > l2_w_buy else l2_w_buy * -1
+    l3w_val = l3_w_sell if l3_w_sell > l3_w_buy else l3_w_buy * -1
+
+    total_w = total_w_sell if total_w_sell > total_w_buy else total_w_buy * -1
+
+    # 20 results from the length of 10000.0 (7) + the length of the ANSI color characters (13), TODO preconvert to strings
+    kwh_sell_str = f'{kwh_sell: >8.4f}'
+    kwh_buy_str = f'{kwh_buy: >8.4f}'
+    print(f'{color_value(l1w_val): >20} + {color_value(l2w_val): >20} + {color_value(l3w_val): >20} = {color_value(total_w): >20} | {green(kwh_sell_str)} | {red(kwh_buy_str)}')
+
+    return (total_w_buy, total_w_sell)
 
 
 def main():
@@ -136,7 +175,8 @@ def main():
                             mqtt_client.publish(f'{args.topic}/buy', buy)
                         if sell > 0.0:
                             mqtt_client.publish(f'{args.topic}/sell', sell)
-                    except NotAnSmaPacket:
+                    except NotAnSmaPacket as e:
+                        # print(e)
                         pass
 
     except Exception as err:
