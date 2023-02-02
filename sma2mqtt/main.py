@@ -33,6 +33,8 @@ class NotAnSmaPacket(Exception):
     pass
 
 
+class MissingEndMarker(Exception):
+    pass
 def parse_args():
     import argparse
 
@@ -88,7 +90,7 @@ def decode_speedwire(data):
 
     end = find_end_marker(data, DATA_START_OFFSET)
     if end != 82:
-        raise NotAnSmaPacket
+        raise MissingEndMarker
 
     # file1 = open('data.txt', 'bw')
     # file1.write(bytearray(data))
@@ -124,18 +126,29 @@ def decode_speedwire(data):
     l3_w = find_int32_be(data, b'\x00\x3e\x04\x00', DATA_START_OFFSET)
     l3_w_sell = l3_w / 10
 
-    l1w_val = l1_w_sell if l1_w_sell > l1_w_buy else l1_w_buy * -1
-    l2w_val = l2_w_sell if l2_w_sell > l2_w_buy else l2_w_buy * -1
-    l3w_val = l3_w_sell if l3_w_sell > l3_w_buy else l3_w_buy * -1
+    l1w = l1_w_sell if l1_w_sell > l1_w_buy else l1_w_buy * -1
+    l2w = l2_w_sell if l2_w_sell > l2_w_buy else l2_w_buy * -1
+    l3w = l3_w_sell if l3_w_sell > l3_w_buy else l3_w_buy * -1
 
     total_w = total_w_sell if total_w_sell > total_w_buy else total_w_buy * -1
 
     # 20 results from the length of 10000.0 (7) + the length of the ANSI color characters (13), TODO preconvert to strings
     kwh_sell_str = f'{kwh_sell: >8.4f}'
     kwh_buy_str = f'{kwh_buy: >8.4f}'
-    print(f'{color_value(l1w_val): >20} + {color_value(l2w_val): >20} + {color_value(l3w_val): >20} = {color_value(total_w): >20} | {green(kwh_sell_str)} | {red(kwh_buy_str)}')
 
-    return (total_w_buy, total_w_sell)
+    print(f'{color_value(l1w): >20} + {color_value(l2w): >20} + {color_value(l3w): >20} = {color_value(total_w): >20} | {green(kwh_sell_str)} | {red(kwh_buy_str)}')
+
+    return {
+        'total_w_buy': total_w_buy,
+        'total_w_sell': total_w_sell,
+    }
+
+
+def publish_values(mqtt_client, topic, values):
+    if values['total_w_buy'] > 0.0:
+        mqtt_client.publish(f'{topic}/buy', values['total_w_buy'])
+    if values['total_w_sell'] > 0.0:
+        mqtt_client.publish(f'{topic}/sell', values['total_w_sell'])
 
 
 def main():
@@ -170,16 +183,16 @@ def main():
             while True:
                 if sock:
                     try:
-                        buy, sell = decode_speedwire(sock.recv(1024))
-                        if buy > 0.0:
-                            mqtt_client.publish(f'{args.topic}/buy', buy)
-                        if sell > 0.0:
-                            mqtt_client.publish(f'{args.topic}/sell', sell)
-                    except NotAnSmaPacket as e:
-                        # print(e)
+                        values = decode_speedwire(sock.recv(1024))
+                        publish_values(mqtt_client, args.topic, values)
+
+                    except NotAnSmaPacket:
+                        pass
+                    except MissingEndMarker:
                         pass
 
     except Exception as err:
+        raise
         print(err)
 
 
