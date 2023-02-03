@@ -195,12 +195,14 @@ def decode_speedwire(data):
     # check against the bounds and ignore runs with erroneous values
     validate_energy(kwh_buy)
     validate_energy(kwh_sell)
-    validate_power(l1_w_sell)
-    validate_power(l2_w_sell)
-    validate_power(l3_w_sell)
     validate_power(l1_w_buy)
     validate_power(l2_w_buy)
     validate_power(l2_w_buy)
+    validate_power(l1_w_sell)
+    validate_power(l2_w_sell)
+    validate_power(l3_w_sell)
+    validate_power(total_w_buy)
+    validate_power(total_w_sell)
 
     total_w = total_w_sell if total_w_sell > total_w_buy else total_w_buy * -1
 
