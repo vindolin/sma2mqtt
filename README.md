@@ -40,6 +40,8 @@ optional arguments:
                         User name for the MQTT connection. (default: None)
   --mqtt_password MQTT_PASSWORD
                         Password name for the MQTT connection. (default: None)
+  --just_print
+                        Don't connect to MQTT and just print the values.
   --dump_data
                         Write the binary datagram to {TMP}/sma_dump.bin.
 ```

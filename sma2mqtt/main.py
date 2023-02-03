@@ -7,7 +7,7 @@ import tempfile
 
 import paho.mqtt.client as mqtt
 
-MULTICAST_IP = '239.12.255.254'
+MULTICAST_IP = '239.12.255.254'  # fixed multicast IP of SMA Energy Meter/Home Manger
 MULTICAST_PORT = 9522
 
 DATA_START_OFFSET = 4
@@ -17,6 +17,7 @@ ENERGY_MAX = 10000000
 POWER_MAX = 100000
 
 dump_data = False
+just_print = False
 tmp_path = os.path.join(tempfile.gettempdir(), 'sma_dump.bin')
 
 
@@ -33,6 +34,7 @@ def parse_args():
     parser.add_argument('--mqtt_port', help='Port for the MQTT connection.', type=int, default=1883)
     parser.add_argument('--mqtt_username', help='User name for the MQTT connection.', default=None)
     parser.add_argument('--mqtt_password', help='Password name for the MQTT connection.', default=None)
+    parser.add_argument('--just_print', help='Don\'t connect to MQTT and just print the values.', action='store_true')
     parser.add_argument('--dump_data', help='Write the binary datagram to {TMP}/sma_dump.bin.', action='store_true')
 
     return parser.parse_args()
@@ -228,59 +230,67 @@ def publish_values(mqtt_client, topic, values):
     # publish only values that have changed from the former run
     for k, v in values.items():
         if last_values[k] != v:
-            mqtt_client.publish(f'{topic}/{k}', v)
+            if not just_print:
+                mqtt_client.publish(f'{topic}/{k}', v)
             last_values[k] = v
 
 
 def main():
-    global dump_data
+    global dump_data, just_print
     args = parse_args()
     dump_data = args.dump_data
+    just_print = args.just_print
 
     mqtt_client = mqtt.Client(args.mqtt_client_id)
 
-    if args.mqtt_username and args.mqtt_password:
-        mqtt_client.username_pw_set(args.mqtt_username, args.mqtt_password)
+    def socket_loop():
+        # setup the multicast socket to the Speedwire host
+        sock = setup_socket()
 
-    try:
-        while True:  # endless loops that reconnects if an mqtt or socket error occurs
-            mqtt_client.loop_start()
-            mqtt_client.connect(args.mqtt_address, args.mqtt_port)
+        # loop that reads the Speedwire and publishes to MQTT
+        while True:
+            if sock:
+                try:
+                    values = decode_speedwire(sock.recv(1024))
+                    publish_values(mqtt_client, args.topic, values)
 
-            print('MQTT connecting', end='')
-            # try to connect to the MQTT server
-            for i in range(30):  # try for 3 seconds
-                if mqtt_client.is_connected():
-                    break
-                print('.', end='')
-                sys.stdout.flush()
-                time.sleep(0.1)
-            print('connected\n')
+                # ignore errors for this run
+                except NotAnSmaPacket:
+                    pass
+                except MissingEndMarker:
+                    pass
+                except DataOutOfBounds:
+                    pass
 
-            if not mqtt_client.is_connected():
-                sys.exit(f'Could not connect to the MQTT server at {args.mqtt_address}:{args.mqtt_port}, please check your parameters.')
+    if just_print:
+        socket_loop()
+    else:
+        if args.mqtt_username and args.mqtt_password:
+            mqtt_client.username_pw_set(args.mqtt_username, args.mqtt_password)
 
-            # setup the multicast socket to the Speedwire host
-            sock = setup_socket()
+        try:
+            while True:  # endless loops that reconnects if an mqtt or socket error occurs
+                mqtt_client.loop_start()
+                mqtt_client.connect(args.mqtt_address, args.mqtt_port)
 
-            # loop that reads the Speedwire and publishes to MQTT
-            while True:
-                if sock:
-                    try:
-                        values = decode_speedwire(sock.recv(1024))
-                        publish_values(mqtt_client, args.topic, values)
+                print('MQTT connecting', end='')
+                # try to connect to the MQTT server
+                for i in range(30):  # try for 3 seconds
+                    if mqtt_client.is_connected():
+                        break
+                    print('.', end='')
+                    sys.stdout.flush()
+                    time.sleep(0.1)
+                print('connected\n')
 
-                    # ignore errors for this run
-                    except NotAnSmaPacket:
-                        pass
-                    except MissingEndMarker:
-                        pass
-                    except DataOutOfBounds:
-                        pass
+                if not mqtt_client.is_connected():
+                    sys.exit(f'Could not connect to the MQTT server at {args.mqtt_address}:{args.mqtt_port}, please check your parameters.')
 
-    except Exception as err:
-        raise
-        print(err)
+                socket_loop()
+
+        except Exception as err:
+            raise
+            print(err)
 
 
 if __name__ == '__main__':
