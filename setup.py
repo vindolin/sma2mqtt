@@ -5,7 +5,8 @@ setup(
     name='sma2mqtt',
     version='0.1',
     author='Thomas Schüßler',
-    description='Command line tool that connects to the multipass stream and writes... TODO',
+    scripts=['scripts/sma2mqtt'],
+    description='Command line tool that listens to the multicast Speedwire of a SMA Energy Meter/Home Manger 2.0 and writes the values to a MQTT server.',
     long_description=open('README.md').read(),
     long_description_content_type="text/markdown",
     classifiers=[
