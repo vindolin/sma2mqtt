@@ -41,5 +41,5 @@ optional arguments:
   --mqtt_password MQTT_PASSWORD
                         Password name for the MQTT connection. (default: None)
   --dump_data
-                        Write the binary datagram to a file.
+                        Write the binary datagram to {TMP}/sma_dump.bin.
 ```

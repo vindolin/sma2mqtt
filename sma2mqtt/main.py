@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument('--mqtt_port', help='Port for the MQTT connection.', type=int, default=1883)
     parser.add_argument('--mqtt_username', help='User name for the MQTT connection.', default=None)
     parser.add_argument('--mqtt_password', help='Password name for the MQTT connection.', default=None)
-    parser.add_argument('--dump_data', help='Write the binary datagram to a file.', action='store_true')
+    parser.add_argument('--dump_data', help='Write the binary datagram to {TMP}/sma_dump.bin.', action='store_true')
 
     return parser.parse_args()
 
