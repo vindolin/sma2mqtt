@@ -140,8 +140,10 @@ def color_value(number):
 
 
 def decode_speedwire(data):
+    global counter
     if counter == 0:
-        print(f'{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >8} | {"kWh SELL": >8} {"kWh BUY": >8}')
+        print(f'{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >8} | {"SELL kWh": >8} {"BUY kWh": >8}')
+    counter += 1
 
     if data[0:3] != b'SMA':  # only handle packets that start with SMA
         raise NotAnSmaPacket
@@ -222,7 +224,6 @@ def publish_values(mqtt_client, topic, values):
     global counter, last_values
 
     # publish all values regardless of changes every n runs
-    counter += 1
     if counter > FORCE_PUBLISH_EVERY:
         last_values = values_template.copy()
         counter = 0
