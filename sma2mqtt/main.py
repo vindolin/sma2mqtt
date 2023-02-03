@@ -139,7 +139,7 @@ def color_value(number):
 def decode_speedwire(data):
     global counter
     if counter == 0:
-        print(f'{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >8} | {"SELL kWh": >8} {"BUY kWh": >8}')
+        print(f'{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >9} | {"SELL kWh": >10} {"BUY kWh": >10}')
     counter += 1
 
     if not data.startswith(b'SMA'):  # only handle packets that start with SMA
@@ -203,10 +203,10 @@ def decode_speedwire(data):
     total_w = total_w_sell if total_w_sell > total_w_buy else total_w_buy * -1
 
     # 20 results from the length of 10000.0 (7) + the length of the ANSI color characters (13), TODO preconvert to strings
-    kwh_sell_str = f'{kwh_sell: >8.4f}'
-    kwh_buy_str = f'{kwh_buy: >8.4f}'
+    kwh_sell_str = f'{kwh_sell: >10.4f}'
+    kwh_buy_str = f'{kwh_buy: >10.4f}'
 
-    print(f'{color_value(l1w): >20} + {color_value(l2w): >20} + {color_value(l3w): >20} = {color_value(total_w): >20} | {green(kwh_sell_str)} {red(kwh_buy_str)}')
+    print(f'{color_value(l1w): >20} + {color_value(l2w): >20} + {color_value(l3w): >20} = {color_value(total_w): >21} | {green(kwh_sell_str)} {red(kwh_buy_str)}')
 
     values = values_template.copy()
 
