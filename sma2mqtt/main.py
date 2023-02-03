@@ -7,6 +7,9 @@ import tempfile
 
 import paho.mqtt.client as mqtt
 
+# All the data parsing is based on what I could gather from other scripts and from looking at the binary data.
+# I did not find any helpful protocol description, but the data I get seems to be valid.
+
 MULTICAST_IP = '239.12.255.254'  # fixed multicast IP of SMA Energy Meter/Home Manger
 MULTICAST_PORT = 9522
 
@@ -50,12 +53,6 @@ class MissingEndMarker(Exception):
 
 class DataOutOfBounds(Exception):
     pass
-
-
-def find_end_marker(data, offset):
-    position = data.find(b'\x00\x02\x0b\x05', offset) + 4
-    length = 1
-    return int.from_bytes(data[position: position + length], byteorder="big")
 
 
 def find_int32_be(data, marker, offset):
@@ -145,11 +142,10 @@ def decode_speedwire(data):
         print(f'{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >8} | {"SELL kWh": >8} {"BUY kWh": >8}')
     counter += 1
 
-    if data[0:3] != b'SMA':  # only handle packets that start with SMA
+    if not data.startswith(b'SMA'):  # only handle packets that start with SMA
         raise NotAnSmaPacket
 
-    end = find_end_marker(data, DATA_START_OFFSET)
-    if end != 82:
+    if not data.endswith(b'\x00\x02\x0b\x05\x52\x00\x00\x00\x00'):
         raise MissingEndMarker
 
     # write binary dgram to disk
