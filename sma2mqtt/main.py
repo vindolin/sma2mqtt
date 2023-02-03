@@ -2,6 +2,8 @@ import sys
 import time
 import socket
 import struct
+import os
+import tempfile
 
 import paho.mqtt.client as mqtt
 
@@ -9,6 +11,43 @@ MULTICAST_IP = '239.12.255.254'
 MULTICAST_PORT = 9522
 
 DATA_START_OFFSET = 4
+FORCE_PUBLISH_EVERY = 50
+
+ENERGY_MAX = 10000000
+POWER_MAX = 100000
+
+dump_data = False
+tmp_path = os.path.join(tempfile.gettempdir(), 'sma_dump.bin')
+
+
+def parse_args():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Listen to SMA Speedwire broadcast traffic and convert it to MQTT messages.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument('--topic', help='Topic for the MQTT message.', default='sma')
+    parser.add_argument('--mqtt_client_id', help='Distinct client ID for the MQTT connection.', default='sma2mqtt')
+    parser.add_argument('--mqtt_address', help='Address for the MQTT connection.', default='localhost')
+    parser.add_argument('--mqtt_port', help='Port for the MQTT connection.', type=int, default=1883)
+    parser.add_argument('--mqtt_username', help='User name for the MQTT connection.', default=None)
+    parser.add_argument('--mqtt_password', help='Password name for the MQTT connection.', default=None)
+    parser.add_argument('--dump_data', help='Write the binary datagram to a file.', action='store_true')
+
+    return parser.parse_args()
+
+
+class NotAnSmaPacket(Exception):
+    pass
+
+
+class MissingEndMarker(Exception):
+    pass
+
+
+class DataOutOfBounds(Exception):
+    pass
 
 
 def find_end_marker(data, offset):
@@ -24,32 +63,46 @@ def find_int32_be(data, marker, offset):
 
 
 def find_bigint64_be(data, marker, offset):
-    position = data.find(marker, offset) + len(marker) # the -1 is here to include the last \x00 into the 8 bytes
+    position = data.find(marker, offset) + len(marker)  # the -1 is here to include the last \x00 into the 8 bytes
     length = 8
     return int.from_bytes(data[position: position + length], byteorder="big")
 
 
-class NotAnSmaPacket(Exception):
-    pass
+def validate_energy(kwh):
+    if abs(kwh) > ENERGY_MAX:
+        raise DataOutOfBounds
 
 
-class MissingEndMarker(Exception):
-    pass
-def parse_args():
-    import argparse
+def validate_power(kw):
+    if abs(kw) > POWER_MAX:
+        raise DataOutOfBounds
 
-    parser = argparse.ArgumentParser(
-        description='Listen to SMA Speedwire broadcast traffic and convert it to MQTT messages.',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    parser.add_argument('--topic', help='Topic for the MQTT message.', default='sma')
-    parser.add_argument('--mqtt_client_id', help='Distinct client ID for the MQTT connection.', default='sma2mqtt')
-    parser.add_argument('--mqtt_address', help='Address for the MQTT connection.', default='localhost')
-    parser.add_argument('--mqtt_port', help='Port for the MQTT connection.', type=int, default=1883)
-    parser.add_argument('--mqtt_username', help='User name for the MQTT connection.', default=None)
-    parser.add_argument('--mqtt_password', help='Password name for the MQTT connection.', default=None)
 
-    return parser.parse_args()
+values_template = {
+    'total_w_buy': None,
+    'total_w_sell': None,
+    'total_w': None,
+
+    'l1_w_buy': None,
+    'l2_w_buy': None,
+    'l3_w_buy': None,
+
+    'l1_w_sell': None,
+    'l2_w_sell': None,
+    'l3_w_sell': None,
+
+    'l1_w': None,
+    'l2_w': None,
+    'l3_w': None,
+
+    'total_w': None,
+
+    'kwh_buy': None,
+    'kwh_sell': None,
+}
+
+last_values = values_template.copy()
+counter = 0
 
 
 def setup_socket():
@@ -85,6 +138,9 @@ def color_value(number):
 
 
 def decode_speedwire(data):
+    if counter == 0:
+        print(f'{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >8} | {"kWh SELL": >8} {"kWh BUY": >8}')
+
     if data[0:3] != b'SMA':  # only handle packets that start with SMA
         raise NotAnSmaPacket
 
@@ -92,15 +148,16 @@ def decode_speedwire(data):
     if end != 82:
         raise MissingEndMarker
 
-    # file1 = open('data.txt', 'bw')
-    # file1.write(bytearray(data))
-    # file1.close()
+    # write binary dgram to disk
+    if dump_data:
+        with open(tmp_path, 'bw') as tmp_file:
+            tmp_file.write(bytearray(data))
 
     total_w_buy = find_int32_be(data, b'\x00\x01\x04\x00', DATA_START_OFFSET)
     total_w_buy /= 10
 
     kwh_buy = find_bigint64_be(data, b'\x00\x01\x08\x00', DATA_START_OFFSET)
-    kwh_buy = kwh_buy / 3600 / 1000
+    kwh_buy = round(kwh_buy / 3600 / 1000, 8)
 
     l1_w = find_int32_be(data, b'\x00\x15\x04\x00', DATA_START_OFFSET)
     l1_w_buy = l1_w / 10
@@ -130,29 +187,56 @@ def decode_speedwire(data):
     l2w = l2_w_sell if l2_w_sell > l2_w_buy else l2_w_buy * -1
     l3w = l3_w_sell if l3_w_sell > l3_w_buy else l3_w_buy * -1
 
+    # sometimes invalid large values get reported
+    # check against the bounds and ignore runs with erroneous values
+    validate_energy(kwh_buy)
+    validate_energy(kwh_sell)
+    validate_power(l1_w_sell)
+    validate_power(l2_w_sell)
+    validate_power(l3_w_sell)
+    validate_power(l1_w_buy)
+    validate_power(l2_w_buy)
+    validate_power(l2_w_buy)
+
     total_w = total_w_sell if total_w_sell > total_w_buy else total_w_buy * -1
 
     # 20 results from the length of 10000.0 (7) + the length of the ANSI color characters (13), TODO preconvert to strings
     kwh_sell_str = f'{kwh_sell: >8.4f}'
     kwh_buy_str = f'{kwh_buy: >8.4f}'
 
-    print(f'{color_value(l1w): >20} + {color_value(l2w): >20} + {color_value(l3w): >20} = {color_value(total_w): >20} | {green(kwh_sell_str)} | {red(kwh_buy_str)}')
+    print(f'{color_value(l1w): >20} + {color_value(l2w): >20} + {color_value(l3w): >20} = {color_value(total_w): >20} | {green(kwh_sell_str)} {red(kwh_buy_str)}')
 
-    return {
-        'total_w_buy': total_w_buy,
-        'total_w_sell': total_w_sell,
-    }
+    values = values_template.copy()
+
+    # copy values into return value dict
+    for k, v in locals().items():
+        if k in values:
+            values[k] = v
+
+    return values
 
 
 def publish_values(mqtt_client, topic, values):
-    if values['total_w_buy'] > 0.0:
-        mqtt_client.publish(f'{topic}/buy', values['total_w_buy'])
-    if values['total_w_sell'] > 0.0:
-        mqtt_client.publish(f'{topic}/sell', values['total_w_sell'])
+    global counter, last_values
+
+    # publish all values regardless of changes every n runs
+    counter += 1
+    if counter > FORCE_PUBLISH_EVERY:
+        last_values = values_template.copy()
+        counter = 0
+
+    # publish only values that have changed from the former run
+    for k, v in values.items():
+        if last_values[k] != v:
+            mqtt_client.publish(f'{topic}/{k}', v)
+            last_values[k] = v
 
 
 def main():
+    global dump_data
     args = parse_args()
+    dump_data = args.dump_data
+
     mqtt_client = mqtt.Client(args.mqtt_client_id)
 
     if args.mqtt_username and args.mqtt_password:
@@ -186,9 +270,12 @@ def main():
                         values = decode_speedwire(sock.recv(1024))
                         publish_values(mqtt_client, args.topic, values)
 
+                    # ignore errors for this run
                     except NotAnSmaPacket:
                         pass
                     except MissingEndMarker:
+                        pass
+                    except DataOutOfBounds:
                         pass
 
     except Exception as err:

@@ -23,7 +23,7 @@ sma2mqtt --help
 usage: sma2mqtt [-h] [--topic TOPIC] [--mqtt_client_id MQTT_CLIENT_ID]
                      [--mqtt_address MQTT_ADDRESS]
                      [--mqtt_port MQTT_PORT] [--mqtt_username MQTT_USERNAME]
-                     [--mqtt_password MQTT_PASSWORD]
+                     [--mqtt_password MQTT_PASSWORD] [--dump_data]
 
 Command line tool that listens to the multicast Speedwire of a SMA Energy Meter/Home Manger 2.0 and writes the values to a MQTT server.
 
@@ -40,4 +40,6 @@ optional arguments:
                         User name for the MQTT connection. (default: None)
   --mqtt_password MQTT_PASSWORD
                         Password name for the MQTT connection. (default: None)
+  --dump_data
+                        Write the binary datagram to a file.
 ```
