@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument('--no_mqtt', help='Don\'t connect to MQTT and just print the values.', action='store_true')
     parser.add_argument('--dump_data', help='Write the binary datagram to {TMP}/sma_dump.bin.', action='store_true')
     parser.add_argument('--serial_nr', help='Only watch packets for this serial number.', default=None)
-    parser.add_argument('--force_print', help='Print the serial number, even if only one was found.', action='store_true')
+    parser.add_argument('--force_print_serial', help='Print the serial number, even if only one was found.', action='store_true')
 
     return parser.parse_args()
 
@@ -171,7 +171,7 @@ def decode_speedwire(data):
     serial_numbers.add(serial_nr)
 
     if counter == 0:
-        serial_hdr = f'{"Serial": >8}' if len(serial_numbers) > 1 or args.force_print else ''
+        serial_hdr = f'{"Serial": >8}' if len(serial_numbers) > 1 or args.force_print_serial else ''
         print(f'{serial_hdr}{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >9} | {"SELL kWh": >10} {"BUY kWh": >10}')
     counter += 1
 
@@ -233,7 +233,7 @@ def decode_speedwire(data):
     kwh_sell_str = f'{kwh_sell: >10.4f}'
     kwh_buy_str = f'{kwh_buy: >10.4f}'
 
-    serial_str = blue(f'{serial_nr}') if len(serial_numbers) > 1 or args.force_print else ''
+    serial_str = blue(f'{serial_nr}') if len(serial_numbers) > 1 or args.force_print_serial else ''
     print(f'{serial_str}{color_value(l1w): >20} + {color_value(l2w): >20} + {color_value(l3w): >20} = {color_value(total_w): >21} | {green(kwh_sell_str)} {red(kwh_buy_str)}')
 
     values = values_template.copy()
