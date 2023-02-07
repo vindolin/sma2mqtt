@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='sma2mqtt',
-    version='0.0.6',
+    version='0.0.7',
     author='Thomas Schüßler',
     scripts=['scripts/sma2mqtt'],
     description='Command line tool that listens to the multicast Speedwire of a SMA Energy Meter/Home Manger 2.0 and writes the values to a MQTT server.',
