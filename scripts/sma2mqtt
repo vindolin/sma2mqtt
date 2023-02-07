@@ -22,11 +22,13 @@ ENERGY_MAX = 10000000
 POWER_MAX = 100000
 
 dump_data = False
-just_print = False
+no_mqtt = False
 tmp_path = os.path.join(tempfile.gettempdir(), 'sma_dump.bin')
+serial_numbers = set()
 
 
 def parse_args():
+    global args
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -39,10 +41,15 @@ def parse_args():
     parser.add_argument('--mqtt_port', help='Port for the MQTT connection.', type=int, default=1883)
     parser.add_argument('--mqtt_username', help='User name for the MQTT connection.', default=None)
     parser.add_argument('--mqtt_password', help='Password name for the MQTT connection.', default=None)
-    parser.add_argument('--just_print', help='Don\'t connect to MQTT and just print the values.', action='store_true')
+    parser.add_argument('--no_mqtt', help='Don\'t connect to MQTT and just print the values.', action='store_true')
     parser.add_argument('--dump_data', help='Write the binary datagram to {TMP}/sma_dump.bin.', action='store_true')
+    parser.add_argument('--serial_nr', help='Only watch packets for this serial number.', default=None)
+    parser.add_argument('--force_print', help='Print the serial number, even if only one was found.', action='store_true')
 
     return parser.parse_args()
+
+
+args = parse_args()
 
 
 class NotAnSmaPacket(Exception):
@@ -54,6 +61,10 @@ class MissingEndMarker(Exception):
 
 
 class DataOutOfBounds(Exception):
+    pass
+
+
+class WrongSerialNr(Exception):
     pass
 
 
@@ -125,6 +136,10 @@ def red(string):
     return f'\033[0;31m{string}\033[00m'
 
 
+def blue(string):
+    return f'\033[0;34m{string}\033[00m'
+
+
 def white(string):
     return f'\033[0;37m{string}\033[00m'
 
@@ -140,15 +155,25 @@ def color_value(number):
 
 def decode_speedwire(data):
     global counter
-    if counter == 0:
-        print(f'{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >9} | {"SELL kWh": >10} {"BUY kWh": >10}')
-    counter += 1
 
     if not data.startswith(b'SMA'):  # only handle packets that start with SMA
         raise NotAnSmaPacket
 
     if not data.endswith(b'\x00\x02\x0b\x05\x52\x00\x00\x00\x00'):
         raise MissingEndMarker
+
+    susy_id = data[4: 7].hex()
+    # print(susy_id.hex())
+    serial_nr = data[20: 24].hex()
+    if args.serial_nr and args.serial_nr != serial_nr:
+        raise WrongSerialNr
+
+    serial_numbers.add(serial_nr)
+
+    if counter == 0:
+        serial_hdr = f'{"Serial": >8}' if len(serial_numbers) > 1 or args.force_print else ''
+        print(f'{serial_hdr}{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >9} | {"SELL kWh": >10} {"BUY kWh": >10}')
+    counter += 1
 
     # write binary dgram to disk
     if dump_data:
@@ -208,7 +233,8 @@ def decode_speedwire(data):
     kwh_sell_str = f'{kwh_sell: >10.4f}'
     kwh_buy_str = f'{kwh_buy: >10.4f}'
 
-    print(f'{color_value(l1w): >20} + {color_value(l2w): >20} + {color_value(l3w): >20} = {color_value(total_w): >21} | {green(kwh_sell_str)} {red(kwh_buy_str)}')
+    serial_str = blue(f'{serial_nr}') if len(serial_numbers) > 1 or args.force_print else ''
+    print(f'{serial_str}{color_value(l1w): >20} + {color_value(l2w): >20} + {color_value(l3w): >20} = {color_value(total_w): >21} | {green(kwh_sell_str)} {red(kwh_buy_str)}')
 
     values = values_template.copy()
 
@@ -217,7 +243,7 @@ def decode_speedwire(data):
         if k in values:
             values[k] = v
 
-    return values
+    return serial_nr, values
 
 
 def publish_values(mqtt_client, topic, values):
@@ -231,40 +257,46 @@ def publish_values(mqtt_client, topic, values):
     # publish only values that have changed from the former run
     for k, v in values.items():
         if last_values[k] != v:
-            if not just_print:
+            if not no_mqtt:
                 mqtt_client.publish(f'{topic}/{k}', v)
             last_values[k] = v
 
 
+dump_data = args.dump_data
+no_mqtt = args.no_mqtt
+
+mqtt_client = mqtt.Client(args.mqtt_client_id)
+
+
+def socket_loop():
+    # setup the multicast socket to the Speedwire host
+    sock = setup_socket()
+
+    # loop that reads the Speedwire and publishes to MQTT
+    while True:
+        if sock:
+            try:
+                serial_nr, values = decode_speedwire(sock.recv(1024))
+
+                if not args.serial_nr or args.serial_nr == serial_nr:
+                    publish_values(mqtt_client, f'{args.topic}/{serial_nr}', values)
+
+            # ignore errors for this run
+            except NotAnSmaPacket:
+                pass
+            except MissingEndMarker:
+                pass
+            except DataOutOfBounds:
+                pass
+            except WrongSerialNr:
+                pass
+
+
 def main():
-    global dump_data, just_print
-    args = parse_args()
-    dump_data = args.dump_data
-    just_print = args.just_print
-
-    mqtt_client = mqtt.Client(args.mqtt_client_id)
-
-    def socket_loop():
-        # setup the multicast socket to the Speedwire host
-        sock = setup_socket()
-
-        # loop that reads the Speedwire and publishes to MQTT
+    if no_mqtt:
         while True:
-            if sock:
-                try:
-                    values = decode_speedwire(sock.recv(1024))
-                    publish_values(mqtt_client, args.topic, values)
+            socket_loop()
 
-                # ignore errors for this run
-                except NotAnSmaPacket:
-                    pass
-                except MissingEndMarker:
-                    pass
-                except DataOutOfBounds:
-                    pass
-
-    if just_print:
-        socket_loop()
     else:
         if args.mqtt_username and args.mqtt_password:
             mqtt_client.username_pw_set(args.mqtt_username, args.mqtt_password)
