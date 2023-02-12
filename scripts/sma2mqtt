@@ -25,7 +25,7 @@ dump_data = False
 no_mqtt = False
 tmp_path = os.path.join(tempfile.gettempdir(), 'sma_dump.bin')
 serial_numbers = set()
-
+print_offsets = False
 
 def parse_args():
     global args
@@ -45,6 +45,7 @@ def parse_args():
     parser.add_argument('--dump_data', help='Write the binary datagram to {TMP}/sma_dump.bin.', action='store_true')
     parser.add_argument('--serial_nr', help='Only watch packets for this serial number.', default=None)
     parser.add_argument('--force_print_serial', help='Print the serial number, even if only one was found.', action='store_true')
+    parser.add_argument('--print_offsets', help='Print the pattern offsets.', action='store_true')
 
     return parser.parse_args()
 
@@ -71,13 +72,13 @@ class WrongSerialNr(Exception):
 def find_int32_be(data, marker, offset):
     position = data.find(marker, offset) + len(marker)
     length = 4
-    return int.from_bytes(data[position: position + length], byteorder='big')
+    return position, int.from_bytes(data[position: position + length], byteorder='big')
 
 
 def find_bigint64_be(data, marker, offset):
     position = data.find(marker, offset) + len(marker)  # the -1 is here to include the last \x00 into the 8 bytes
     length = 8
-    return int.from_bytes(data[position: position + length], byteorder="big")
+    return position, int.from_bytes(data[position: position + length], byteorder="big")
 
 
 def validate_energy(kwh):
@@ -90,30 +91,103 @@ def validate_power(kw):
         raise DataOutOfBounds
 
 
-values_template = {
-    'total_w_buy': None,
-    'total_w_sell': None,
-    'total_w': None,
+find_funcs = {
+    'bigint64_be': find_bigint64_be,
+    'int32_be': find_int32_be,
+}
 
-    'l1_w_buy': None,
-    'l2_w_buy': None,
-    'l3_w_buy': None,
 
-    'l1_w_sell': None,
-    'l2_w_sell': None,
-    'l3_w_sell': None,
+validate_funcs = {
+    'energy': validate_energy,
+    'power': validate_power,
+}
 
+
+rules = [
+    {
+        'name': 'total_w_buy',
+        'pattern': b'\x00\x01\x04\x00',
+        'type': 'int32_be',
+        'value_type': 'power',
+        'divider': lambda v: v / 10,
+    },
+    {
+        'name': 'kwh_buy',
+        'pattern': b'\x00\x01\x08\x00',
+        'type': 'bigint64_be',
+        'value_type': 'energy',
+        'divider': lambda v: round(v / 3600 / 1000, 8),
+    },
+    {
+        'name': 'total_w_sell',
+        'pattern': b'\x00\x02\x04\x00',
+        'type': 'int32_be',
+        'value_type': 'power',
+        'divider': lambda v: v / 10,
+    },
+    {
+        'name': 'kwh_sell',
+        'pattern': b'\x00\x02\x08\x00',
+        'type': 'bigint64_be',
+        'value_type': 'energy',
+        'divider': lambda v: round(v / 3600 / 1000, 8),
+    },
+    {
+        'name': 'l1_w_buy',
+        'pattern': b'\x00\x15\x04\x00',
+        'type': 'int32_be',
+        'value_type': 'power',
+        'divider': lambda v: v / 10,
+    },
+    {
+        'name': 'l1_w_sell',
+        'pattern': b'\x00\x16\x04\x00',
+        'type': 'int32_be',
+        'value_type': 'power',
+        'divider': lambda v: v / 10,
+    },
+    {
+        'name': 'l2_w_buy',
+        'pattern': b'\x00\x29\x04\x00',
+        'type': 'int32_be',
+        'value_type': 'power',
+        'divider': lambda v: v / 10,
+    },
+    {
+        'name': 'l2_w_sell',
+        'pattern': b'\x00\x2A\x04\x00',
+        'type': 'int32_be',
+        'value_type': 'power',
+        'divider': lambda v: v / 10,
+    },
+    {
+        'name': 'l3_w_buy',
+        'pattern': b'\x00\x3d\x04\x00',
+        'type': 'int32_be',
+        'value_type': 'power',
+        'divider': lambda v: v / 10,
+    },
+    {
+        'name': 'l3_w_sell',
+        'pattern': b'\x00\x3e\x04\x00',
+        'type': 'int32_be',
+        'value_type': 'power',
+        'divider': lambda v: v / 10,
+    },
+]
+
+
+values_template = {rule['name']: None for rule in rules} | {
     'l1_w': None,
     'l2_w': None,
     'l3_w': None,
-
     'total_w': None,
-
-    'kwh_buy': None,
-    'kwh_sell': None,
 }
 
 last_values = values_template.copy()
+
+pattern_offsets = {}
+
 counter = 0
 
 
@@ -154,7 +228,7 @@ def color_value(number):
 
 
 def decode_speedwire(data):
-    global counter
+    global counter, print_offsets
 
     if not data.startswith(b'SMA'):  # only handle packets that start with SMA
         raise NotAnSmaPacket
@@ -170,78 +244,50 @@ def decode_speedwire(data):
 
     serial_numbers.add(serial_nr)
 
-    if counter == 0:
-        serial_hdr = f'{"Serial": >8}' if len(serial_numbers) > 1 or args.force_print_serial else ''
-        print(f'{serial_hdr}{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >9} | {"SELL kWh": >10} {"BUY kWh": >10}')
-    counter += 1
-
     # write binary dgram to disk
     if dump_data:
         with open(tmp_path, 'bw') as tmp_file:
             tmp_file.write(bytearray(data))
 
-    total_w_buy = find_int32_be(data, b'\x00\x01\x04\x00', DATA_START_OFFSET)
-    total_w_buy /= 10
+    values = {}
 
-    kwh_buy = find_bigint64_be(data, b'\x00\x01\x08\x00', DATA_START_OFFSET)
-    kwh_buy = round(kwh_buy / 3600 / 1000, 8)
+    for pattern in rules:
+        position, value = find_funcs[pattern['type']](data, pattern['pattern'], DATA_START_OFFSET)
+        values[pattern['name']] = pattern['divider'](value)
 
-    l1_w = find_int32_be(data, b'\x00\x15\x04\x00', DATA_START_OFFSET)
-    l1_w_buy = l1_w / 10
+        if print_offsets:
+            pattern_offsets[pattern['name']] = position
 
-    l2_w = find_int32_be(data, b'\x00\x29\x04\x00', DATA_START_OFFSET)
-    l2_w_buy = l2_w / 10
+    if print_offsets:
+        print_offsets = False
+        print('Offsets:')
+        for pattern in rules:
+            hex_pattern = ':'.join([f'{i:02x}' for i in pattern['pattern']])
+            print(f'''{hex_pattern}  {pattern_offsets[pattern['name']]: >3}  {pattern['name']}''')
+        print()
 
-    l3_w = find_int32_be(data, b'\x00\x3d\x04\x00', DATA_START_OFFSET)
-    l3_w_buy = l3_w / 10
+    if counter == 0:
+        serial_hdr = f'{"Serial": >8}' if len(serial_numbers) > 1 or args.force_print_serial else ''
+        print(f'{serial_hdr}{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >9} | {"SELL kWh": >10} {"BUY kWh": >10}')
+    counter += 1
 
-    total_w_sell = find_int32_be(data, b'\x00\x02\x04\x00', DATA_START_OFFSET)
-    total_w_sell /= 10
-
-    kwh_sell = find_bigint64_be(data, b'\x00\x02\x08\x00', DATA_START_OFFSET)
-    kwh_sell = kwh_sell / 3600 / 1000
-
-    l1_w = find_int32_be(data, b'\x00\x16\x04\x00', DATA_START_OFFSET)
-    l1_w_sell = l1_w / 10
-
-    l2_w = find_int32_be(data, b'\x00\x2A\x04\x00', DATA_START_OFFSET)
-    l2_w_sell = l2_w / 10
-
-    l3_w = find_int32_be(data, b'\x00\x3e\x04\x00', DATA_START_OFFSET)
-    l3_w_sell = l3_w / 10
-
-    l1w = l1_w_sell if l1_w_sell > l1_w_buy else l1_w_buy * -1
-    l2w = l2_w_sell if l2_w_sell > l2_w_buy else l2_w_buy * -1
-    l3w = l3_w_sell if l3_w_sell > l3_w_buy else l3_w_buy * -1
+    values['l1_w'] = values['l1_w_sell'] if values['l1_w_sell'] > values['l1_w_buy'] else values['l1_w_buy'] * -1
+    values['l2_w'] = values['l2_w_sell'] if values['l2_w_sell'] > values['l2_w_buy'] else values['l2_w_buy'] * -1
+    values['l3_w'] = values['l3_w_sell'] if values['l3_w_sell'] > values['l3_w_buy'] else values['l3_w_buy'] * -1
 
     # sometimes invalid large values get reported
     # check against the bounds and ignore runs with erroneous values
-    validate_energy(kwh_buy)
-    validate_energy(kwh_sell)
-    validate_power(l1_w_buy)
-    validate_power(l2_w_buy)
-    validate_power(l2_w_buy)
-    validate_power(l1_w_sell)
-    validate_power(l2_w_sell)
-    validate_power(l3_w_sell)
-    validate_power(total_w_buy)
-    validate_power(total_w_sell)
+    for rule in rules:
+        validate_funcs[rule['value_type']](values[rule['name']])
 
-    total_w = total_w_sell if total_w_sell > total_w_buy else total_w_buy * -1
+    values['total_w'] = values['total_w_sell'] if values['total_w_sell'] > values['total_w_buy'] else values['total_w_buy'] * -1
 
     # 20 results from the length of 10000.0 (7) + the length of the ANSI color characters (13), TODO preconvert to strings
-    kwh_sell_str = f'{kwh_sell: >10.4f}'
-    kwh_buy_str = f'{kwh_buy: >10.4f}'
+    kwh_sell_str = f'{values["kwh_sell"]: >10.4f}'
+    kwh_buy_str = f'{values["kwh_buy"]: >10.4f}'
 
     serial_str = blue(f'{serial_nr}') if len(serial_numbers) > 1 or args.force_print_serial else ''
-    print(f'{serial_str}{color_value(l1w): >20} + {color_value(l2w): >20} + {color_value(l3w): >20} = {color_value(total_w): >21} | {green(kwh_sell_str)} {red(kwh_buy_str)}')
-
-    values = values_template.copy()
-
-    # copy values into return value dict
-    for k, v in locals().items():
-        if k in values:
-            values[k] = v
+    print(f'{serial_str}{color_value(values["l1_w"]): >20} + {color_value(values["l2_w"]): >20} + {color_value(values["l3_w"]): >20} = {color_value(values["total_w"]): >21} | {green(kwh_sell_str)} {red(kwh_buy_str)}')
 
     return serial_nr, values
 
@@ -250,7 +296,7 @@ def publish_values(mqtt_client, topic, values):
     global counter, last_values
 
     # publish all values regardless of changes every n runs
-    if counter > FORCE_PUBLISH_EVERY:
+    if counter >= FORCE_PUBLISH_EVERY:
         last_values = values_template.copy()
         counter = 0
 
@@ -264,6 +310,7 @@ def publish_values(mqtt_client, topic, values):
 
 dump_data = args.dump_data
 no_mqtt = args.no_mqtt
+print_offsets = args.print_offsets
 
 mqtt_client = mqtt.Client(args.mqtt_client_id)
 
