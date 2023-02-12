@@ -13,7 +13,7 @@ import paho.mqtt.client as mqtt
 # I did not find any helpful protocol description, but the data I get seems to be valid.
 
 MULTICAST_IP = '239.12.255.254'  # fixed multicast IP of SMA Energy Meter/Home Manger
-MULTICAST_PORT = 9522
+MULTICAST_PORT = 9522  # fixed port
 
 DATA_START_OFFSET = 4
 FORCE_PUBLISH_EVERY = 50
@@ -26,6 +26,7 @@ no_mqtt = False
 tmp_path = os.path.join(tempfile.gettempdir(), 'sma_dump.bin')
 serial_numbers = set()
 print_offsets = False
+
 
 def parse_args():
     global args
@@ -45,7 +46,7 @@ def parse_args():
     parser.add_argument('--dump_data', help='Write the binary datagram to {TMP}/sma_dump.bin.', action='store_true')
     parser.add_argument('--serial_nr', help='Only watch packets for this serial number.', default=None)
     parser.add_argument('--force_print_serial', help='Print the serial number, even if only one was found.', action='store_true')
-    parser.add_argument('--print_offsets', help='Print the pattern offsets.', action='store_true')
+    parser.add_argument('--print_offsets', help='Print the offsets where the patterns were found.', action='store_true')
 
     return parser.parse_args()
 
@@ -176,13 +177,14 @@ rules = [
     },
 ]
 
-
-values_template = {rule['name']: None for rule in rules} | {
+computed_values = {
     'l1_w': None,
     'l2_w': None,
     'l3_w': None,
     'total_w': None,
 }
+
+values_template = {rule['name']: None for rule in rules} | computed_values
 
 last_values = values_template.copy()
 
@@ -271,16 +273,13 @@ def decode_speedwire(data):
         print(f'{serial_hdr}{"L1 W": >8} + {"L2 W": >8} + {"L3 W": >8} = {"TOTAL W": >9} | {"SELL kWh": >10} {"BUY kWh": >10}')
     counter += 1
 
-    values['l1_w'] = values['l1_w_sell'] if values['l1_w_sell'] > values['l1_w_buy'] else values['l1_w_buy'] * -1
-    values['l2_w'] = values['l2_w_sell'] if values['l2_w_sell'] > values['l2_w_buy'] else values['l2_w_buy'] * -1
-    values['l3_w'] = values['l3_w_sell'] if values['l3_w_sell'] > values['l3_w_buy'] else values['l3_w_buy'] * -1
+    for name in computed_values.keys():
+        values[f'{name}'] = values[f'{name}_sell'] if values[f'{name}_sell'] > values[f'{name}_buy'] else values[f'{name}_buy'] * -1
 
     # sometimes invalid large values get reported
     # check against the bounds and ignore runs with erroneous values
     for rule in rules:
         validate_funcs[rule['value_type']](values[rule['name']])
-
-    values['total_w'] = values['total_w_sell'] if values['total_w_sell'] > values['total_w_buy'] else values['total_w_buy'] * -1
 
     # 20 results from the length of 10000.0 (7) + the length of the ANSI color characters (13), TODO preconvert to strings
     kwh_sell_str = f'{values["kwh_sell"]: >10.4f}'
